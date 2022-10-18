@@ -134,7 +134,6 @@ resource "azurerm_network_security_group" "db-nsg" {
 }
 
 
-
 # Generate random password
 resource "random_password" "linux-vm-password" {
   length           = 7
@@ -344,7 +343,7 @@ terraform {
   backend "azurerm" {
     resource_group_name  = "tfstorage"
     storage_account_name = "tfstatestoragebootcamp"
-    container_name       = "tfcontainer"
+    container_name       = "tfcontainernew"
     key                  = "terraform.tfstate"
   }
 }
