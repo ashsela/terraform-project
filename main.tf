@@ -47,15 +47,16 @@ resource "azurerm_subnet" "private_subnet" {
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = [var.private_subnet_cidr]
-}
-
-
-# Create public IPs
-resource "azurerm_public_ip" "public_ip" {
-  name                = var.public_ip
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Static"
+  enforce_private_link_endpoint_network_policies = true
+  delegation {
+    name = "fs"
+    service_delegation {
+      name = "Microsoft.DBforPostgreSQL/flexibleServers"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action",
+      ]
+    }
+  }
 }
 
 # Create public IPs
@@ -136,7 +137,7 @@ resource "azurerm_network_security_group" "db-nsg" {
 
 # Generate random password
 resource "random_password" "linux-vm-password" {
-  length           = 7
+  length           = 8
   min_upper        = 2
   min_lower        = 2
   min_special      = 2
@@ -180,33 +181,39 @@ resource "azurerm_linux_virtual_machine" "app_vm" {
 }
 
 
-# Create DB virtual machine
-resource "azurerm_linux_virtual_machine" "db_vm" {
-  name                  = "db_vm"
-  location              = azurerm_resource_group.rg.location
-  resource_group_name   = azurerm_resource_group.rg.name
-  network_interface_ids = [azurerm_network_interface.db-nic.id]
-  size                  = var.azurerm_linux_virtual_machine_size
+# Create Managed DB 
 
-  os_disk {
-    name                 = "dbdisk"
-    caching              = "ReadWrite"
-    storage_account_type = "Premium_LRS"
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "UbuntuServer"
-    sku       = "18.04-LTS"
-    version   = "latest"
-  }
-  computer_name  = "ubuntu"
-  admin_username = var.linux_admin_username
-  admin_password = random_password.linux-vm-password.result
-  disable_password_authentication = false
+resource "azurerm_private_dns_zone" "bootcamp" {
+  name                = "bootcamp.postgres.database.azure.com"
+  resource_group_name = azurerm_resource_group.rg.name
 }
 
+resource "azurerm_private_dns_zone_virtual_network_link" "bootcamp" {
+  name                  = "bootcampVnetZone.com"
+  private_dns_zone_name = azurerm_private_dns_zone.bootcamp.name
+  virtual_network_id    = azurerm_virtual_network.vnet.id
+  resource_group_name   = azurerm_resource_group.rg.name
+}
 
+resource "azurerm_postgresql_flexible_server" "bootcamp-psqlflexibleserver" {
+  name                   = "bootcamp-psqlflexibleserver"
+  resource_group_name    = azurerm_resource_group.rg.name
+  location               = azurerm_resource_group.rg.location
+  version                = "12"
+  delegated_subnet_id    = azurerm_subnet.private_subnet.id
+  private_dns_zone_id    = azurerm_private_dns_zone.bootcamp.id
+  administrator_login    = "postgres"
+  administrator_password = "p@ssw0rd42"
+  zone                   = "1"
+
+  storage_mb = 32768
+
+  sku_name   = "GP_Standard_D4s_v3"
+  depends_on = [azurerm_private_dns_zone_virtual_network_link.bootcamp]
+
+}
+
+# sku_name = "GP_Gen5_2"
 #Create a load balancer for the VM's that running the application
 
 resource "azurerm_lb" "lb" {
@@ -308,19 +315,7 @@ resource "azurerm_network_interface" "app-nic" {
 }
 
 
-# Create a network interface for db vm
 
-resource "azurerm_network_interface" "db-nic" {
-  name                = "db-nic"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.private_subnet.id
-    private_ip_address_allocation = "Dynamic"
-  }
-}
 
 # Connect the security group to the network interface
 resource "azurerm_network_interface_security_group_association" "app" {
@@ -329,11 +324,6 @@ resource "azurerm_network_interface_security_group_association" "app" {
   network_security_group_id = azurerm_network_security_group.app-nsg.id
 }
 
-# Connect the security group to the network interface
-resource "azurerm_network_interface_security_group_association" "db" {
-  network_interface_id      = azurerm_network_interface.db-nic.id
-  network_security_group_id = azurerm_network_security_group.db-nsg.id
-}
 
 
 
@@ -343,7 +333,7 @@ terraform {
   backend "azurerm" {
     resource_group_name  = "tfstorage"
     storage_account_name = "tfstatestoragebootcamp"
-    container_name       = "tfcontainernew"
+    container_name       = "tfcontainer"
     key                  = "terraform.tfstate"
   }
 }
